@@ -112,6 +112,24 @@ defmodule NimbleGeneratorTest do
     assert byte_size(generate(parsec)) === 3
   end
 
+  test "ascii_string" do
+    assert ascii_string([?a..?z], 3) |> generate() =~ ~r/\A[a-z]{3}\z/
+
+    parsec = ascii_string([?a..?z], min: 2)
+    assert eventually?(fn -> generate(parsec) =~ ~r/\A[a-z]{2}\z/ end)
+    assert eventually?(fn -> generate(parsec) =~ ~r/\A[a-z]{5}\z/ end)
+
+    parsec = ascii_string([?a..?z], min: 2, max: 3)
+    assert eventually?(fn -> generate(parsec) =~ ~r/\A[a-z]{2}\z/ end)
+    assert eventually?(fn -> generate(parsec) =~ ~r/\A[a-z]{3}\z/ end)
+  end
+
+  test "utf8_string" do
+    parsec = utf8_string([?á..?é], min: 1, max: 2)
+    assert eventually?(fn -> generate(parsec) =~ ~r/\A[á-é]{1}\z/u end)
+    assert eventually?(fn -> generate(parsec) =~ ~r/\A[á-é]{2}\z/u end)
+  end
+
   defparsec :string_foo, string("foo"), export_metadata: true
   defparsec :string_choice, choice([parsec(:string_foo), string("bar")]), export_metadata: true
 
