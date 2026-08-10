@@ -312,8 +312,6 @@ defmodule NimbleParsecTest do
     end
   end
 
-  # An empty range may match a newline, so the combinators above keep line
-  # tracking. These restrict the range so the string is scanned as a slice.
   describe "utf8_string/2 combinator with min/max over a newline-free range" do
     defparsecp :min_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], min: 2)
     defparsecp :max_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], max: 3)
