@@ -312,6 +312,41 @@ defmodule NimbleParsecTest do
     end
   end
 
+  describe "utf8_string/2 combinator with min/max over a newline-free range" do
+    defparsecp :min_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], min: 2)
+    defparsecp :max_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], max: 3)
+    defparsecp :min_max_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], min: 2, max: 3)
+    defparsecp :not_newline_utf8_string, utf8_string([not: ?\n], min: 1)
+
+    @error "expected utf8 codepoint in the range \"a\" to \"z\" or in the range \"á\" to \"é\", " <>
+             "followed by utf8 codepoint in the range \"a\" to \"z\" or in the range \"á\" to \"é\""
+
+    test "returns ok/error with min" do
+      assert min_sliced_utf8_string("áé") == {:ok, ["áé"], "", %{}, {1, 0}, 4}
+      assert min_sliced_utf8_string("aébc") == {:ok, ["aébc"], "", %{}, {1, 0}, 5}
+      assert min_sliced_utf8_string("áé1") == {:ok, ["áé"], "1", %{}, {1, 0}, 4}
+      assert min_sliced_utf8_string("á") == {:error, @error, "á", %{}, {1, 0}, 0}
+      assert min_sliced_utf8_string("1á") == {:error, @error, "1á", %{}, {1, 0}, 0}
+    end
+
+    test "returns ok/error with max" do
+      assert max_sliced_utf8_string("1") == {:ok, [""], "1", %{}, {1, 0}, 0}
+      assert max_sliced_utf8_string("áé") == {:ok, ["áé"], "", %{}, {1, 0}, 4}
+      assert max_sliced_utf8_string("áéâ1") == {:ok, ["áéâ"], "1", %{}, {1, 0}, 6}
+      assert max_sliced_utf8_string("áéâa") == {:ok, ["áéâ"], "a", %{}, {1, 0}, 6}
+    end
+
+    test "returns ok/error with min/max" do
+      assert min_max_sliced_utf8_string("á") == {:error, @error, "á", %{}, {1, 0}, 0}
+      assert min_max_sliced_utf8_string("áé") == {:ok, ["áé"], "", %{}, {1, 0}, 4}
+      assert min_max_sliced_utf8_string("áéâa") == {:ok, ["áéâ"], "a", %{}, {1, 0}, 6}
+    end
+
+    test "does not slice past a newline" do
+      assert not_newline_utf8_string("aé\nb") == {:ok, ["aé"], "\nb", %{}, {1, 0}, 3}
+    end
+  end
+
   describe "ignore/2 combinator at compile time" do
     defparsecp :compile_ignore, ignore(string("TO"))
     defparsecp :compile_ignore_with_newline, ignore(string("T\nO"))
