@@ -231,6 +231,7 @@ defmodule NimbleParsec do
   #   1. Update the combinator type below
   #   2. Update the compiler with combinator
   #   3. Update the compiler with label step
+  #   4. Update the generator with combinator
   #
   @typep combinator :: bound_combinator | maybe_bound_combinator | unbound_combinator
 
@@ -250,6 +251,8 @@ defmodule NimbleParsec do
            | {:lookahead, t, :positive | :negative}
            | {:parsec, atom | {module, atom}}
            | {:repeat, t, mfargs, gen_times}
+           | {:string_slice, [inclusive_range], [exclusive_range], bin_modifier, non_neg_integer,
+              pos_integer | nil}
            | {:times, t, pos_integer}
 
   @doc ~S"""
@@ -375,6 +378,12 @@ defmodule NimbleParsec do
 
   defp generate([{:repeat, t, _, gen} | parsecs], mod, acc) do
     generate(parsecs, mod, gen_times(t, int_random(gen), mod, acc))
+  end
+
+  defp generate([{:string_slice, inclusive, exclusive, modifier, min, max} | parsecs], mod, acc) do
+    extra = if max, do: Enum.random(0..(max - min)), else: int_random(nil)
+    segment = [{:bin_segment, inclusive, exclusive, modifier}]
+    generate(parsecs, mod, gen_times(segment, min + extra, mod, acc))
   end
 
   defp generate([{:times, t, max} | parsecs], mod, acc) do
@@ -2004,6 +2013,13 @@ defmodule NimbleParsec do
        when is_list(opts) do
     {min, max} = validate_min_and_max!(opts)
 
+    case NimbleParsec.Compiler.string_slice(to_repeat, runtime, min, max) do
+      nil -> min_max_runtime_chars(combinator, to_repeat, min, max, compile, runtime, args)
+      slice -> [slice | combinator]
+    end
+  end
+
+  defp min_max_runtime_chars(combinator, to_repeat, min, max, compile, runtime, args) do
     chars =
       if min > 0 do
         min_max_compile_runtime_chars(empty(), to_repeat, min, compile, runtime, args)

@@ -231,6 +231,64 @@ defmodule NimbleParsec.Compiler do
     compile_unbound_traverse(combinators, kind, current, step, config, fun)
   end
 
+  defp compile_unbound_combinator(
+         {:string_slice, inclusive, exclusive, modifier, min, max},
+         current,
+         step,
+         config
+       ) do
+    {scan, step} = build_next(step, config)
+    {next, step} = build_next(step, config)
+
+    {var, _} = build_var(0)
+    input = apply_bin_modifier(var, modifier)
+
+    {count, init, incr, done} =
+      if max do
+        {[quote(do: count)], [0], [quote(do: count + 1)], [quote(do: _count)]}
+      else
+        {[], [], [], []}
+      end
+
+    args = fn rest, count ->
+      quote(do: [unquote(rest), orig, unquote_splicing(count), acc, stack, context, line, offset])
+    end
+
+    guards = compile_bin_ranges(var, inclusive, exclusive)
+    guards = if max, do: guards ++ [quote(do: count < unquote(max - min))], else: guards
+
+    recur_def =
+      {scan, args.(quote(do: <<unquote(input), rest::binary>>), count),
+       guards_list_to_quoted(guards), {scan, [], args.(quote(do: rest), incr)}}
+
+    slice =
+      if config.replace, do: quote(do: acc), else: quote(do: [binary_part(orig, 0, len) | acc])
+
+    done_def =
+      {scan, args.(quote(do: rest), done), true,
+       quote do
+         len = byte_size(orig) - byte_size(rest)
+         unquote(next)(rest, unquote(slice), stack, context, line, offset + len)
+       end}
+
+    {orig, guards, rest, failure_defs, inline, step} =
+      if min > 0 do
+        segments = List.duplicate({:bin_segment, inclusive, exclusive, modifier}, min)
+        {[], inputs, guards, _, _, metadata} = take_bound_combinators(segments)
+        {prefix, _} = compile_bound_bin_pattern(inputs, metadata, quote(do: rest))
+        failure_defs = [build_catch_all(:positive, current, segments, config)]
+
+        {quote(do: unquote(prefix) = orig), guards, quote(do: rest), failure_defs, [], step}
+      else
+        {quote(do: orig), [], quote(do: orig), [], [{current, @arity}], step}
+      end
+
+    head = quote(do: [unquote(orig), acc, stack, context, line, offset])
+    entry_def = {current, head, guards_list_to_quoted(guards), {scan, [], args.(rest, init)}}
+
+    {[entry_def | failure_defs] ++ [recur_def, done_def], inline, next, step, :catch_none}
+  end
+
   defp compile_unbound_combinator({:times, combinators, count}, current, step, config) do
     if all_no_context_combinators?(combinators) do
       compile_bound_times(combinators, count, current, step, config)
@@ -876,7 +934,7 @@ defmodule NimbleParsec.Compiler do
       end
 
     line =
-      if newline_allowed?(inclusive) and not newline_forbidden?(exclusive) do
+      if newline_possible?(inclusive, exclusive) do
         add_line(line, offset, var)
       else
         line
@@ -948,6 +1006,26 @@ defmodule NimbleParsec.Compiler do
     {:+, [], [var, extra]}
   end
 
+  @doc """
+  Lowers a repeated character class into a `:string_slice` combinator, if possible.
+
+  A class that may match a newline is left alone, as line tracking happens per
+  codepoint on the accumulator path.
+  """
+  def string_slice([{:bin_segment, ors, ands, modifier}], :__runtime_string__, min, max) do
+    if not newline_possible?(ors, ands) do
+      {:string_slice, ors, ands, modifier, min, max}
+    end
+  end
+
+  def string_slice(_to_repeat, _runtime, _min, _max), do: nil
+
+  # Whether a character class can match a newline, and therefore whether the
+  # combinator consuming it has to track lines at all.
+  defp newline_possible?(inclusive, exclusive) do
+    newline_allowed?(inclusive) and not newline_forbidden?(exclusive)
+  end
+
   defp newline_allowed?([]), do: true
 
   defp newline_allowed?(ors) do
@@ -1012,6 +1090,9 @@ defmodule NimbleParsec.Compiler do
 
     prefix <> Enum.join([Enum.join(inclusive, " or") | exclusive], ", and not")
   end
+
+  defp label({:string_slice, inclusive, exclusive, modifier, _min, _max}),
+    do: label({:bin_segment, inclusive, exclusive, modifier})
 
   defp label(:eos) do
     "end of string"
