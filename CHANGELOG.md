@@ -1,5 +1,22 @@
 # Changelog for NimbleParsec
 
+## Unreleased
+
+### Enhancements
+
+  * Compile `ascii_string/3` and `utf8_string/3` with `:min`/`:max` over a character
+    class that cannot match a newline into a scan plus a single slice of the input,
+    rather than accumulating a codepoint list and joining it. Between 1.1x and 7.6x
+    faster depending on how much is matched. Note the resulting string may be a
+    sub-binary of the input, so see the memory usage notes in the documentation if
+    you retain long strings from a much larger input
+
+### Bug fixes
+
+  * `ascii_string/3` and `utf8_string/3` nested in `choice/2`, `lookahead/2` or
+    `lookahead_not/2` now produce an error message naming the character class once,
+    instead of repeating it `:min` plus one times
+
 ## v1.4.2 (2025-01-21)
 
 ### Enhancements

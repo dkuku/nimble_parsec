@@ -220,6 +220,7 @@ defmodule NimbleParsecTest do
     defparsecp :min_ascii_string, ascii_string([?0..?9], min: 2)
     defparsecp :max_ascii_string, ascii_string([?0..?9], max: 3)
     defparsecp :min_max_ascii_string, ascii_string([?0..?9], min: 2, max: 3)
+    defparsecp :min_zero_ascii_string, ascii_string([?0..?9], min: 0)
 
     @error "expected ASCII character in the range \"0\" to \"9\", followed by ASCII character in the range \"0\" to \"9\""
 
@@ -229,6 +230,11 @@ defmodule NimbleParsecTest do
       assert min_ascii_string("123o") == {:ok, ["123"], "o", %{}, {1, 0}, 3}
       assert min_ascii_string("1234") == {:ok, ["1234"], "", %{}, {1, 0}, 4}
       assert min_ascii_string("1") == {:error, @error, "1", %{}, {1, 0}, 0}
+
+      assert min_zero_ascii_string("12") == {:ok, ["12"], "", %{}, {1, 0}, 2}
+      assert min_zero_ascii_string("123o") == {:ok, ["123"], "o", %{}, {1, 0}, 3}
+      assert min_zero_ascii_string("o") == {:ok, [""], "o", %{}, {1, 0}, 0}
+      assert min_zero_ascii_string("") == {:ok, [""], "", %{}, {1, 0}, 0}
     end
 
     test "returns ok/error with max" do
@@ -245,6 +251,10 @@ defmodule NimbleParsecTest do
       assert min_max_ascii_string("123") == {:ok, ["123"], "", %{}, {1, 0}, 3}
       assert min_max_ascii_string("1234") == {:ok, ["123"], "4", %{}, {1, 0}, 3}
       assert min_max_ascii_string("12o") == {:ok, ["12"], "o", %{}, {1, 0}, 2}
+    end
+
+    test "treats a max without a min as min: 0" do
+      assert ascii_string([?0..?9], max: 3) == ascii_string([?0..?9], min: 0, max: 3)
     end
 
     test "is not bound" do
@@ -309,6 +319,10 @@ defmodule NimbleParsecTest do
       assert min_max_utf8_string("áé\xFF") == {:ok, ["áé"], "\xFF", %{}, {1, 0}, 4}
     end
 
+    test "treats a max without a min as min: 0" do
+      assert utf8_string([], max: 3) == utf8_string([], min: 0, max: 3)
+    end
+
     test "is not bound" do
       assert not_bound?(utf8_string([], min: 3))
       assert not_bound?(utf8_string([], max: 3))
@@ -320,6 +334,7 @@ defmodule NimbleParsecTest do
     defparsecp :min_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], min: 2)
     defparsecp :max_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], max: 3)
     defparsecp :min_max_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], min: 2, max: 3)
+    defparsecp :min_zero_sliced_utf8_string, utf8_string([?a..?z, ?á..?é], min: 0)
     defparsecp :not_newline_utf8_string, utf8_string([not: ?\n], min: 1)
 
     @error "expected utf8 codepoint in the range \"a\" to \"z\" or in the range \"á\" to \"é\", " <>
@@ -331,6 +346,11 @@ defmodule NimbleParsecTest do
       assert min_sliced_utf8_string("áé1") == {:ok, ["áé"], "1", %{}, {1, 0}, 4}
       assert min_sliced_utf8_string("á") == {:error, @error, "á", %{}, {1, 0}, 0}
       assert min_sliced_utf8_string("1á") == {:error, @error, "1á", %{}, {1, 0}, 0}
+
+      assert min_zero_sliced_utf8_string("áé") == {:ok, ["áé"], "", %{}, {1, 0}, 4}
+      assert min_zero_sliced_utf8_string("aébc") == {:ok, ["aébc"], "", %{}, {1, 0}, 5}
+      assert min_zero_sliced_utf8_string("1á") == {:ok, [""], "1á", %{}, {1, 0}, 0}
+      assert min_zero_sliced_utf8_string("") == {:ok, [""], "", %{}, {1, 0}, 0}
     end
 
     test "returns ok/error with max" do
@@ -348,6 +368,46 @@ defmodule NimbleParsecTest do
 
     test "does not slice past a newline" do
       assert not_newline_utf8_string("aé\nb") == {:ok, ["aé"], "\nb", %{}, {1, 0}, 3}
+    end
+  end
+
+  describe "ascii_string/3 over a newline-free range nested in other combinators" do
+    defparsecp :lookahead_sliced,
+               lookahead(ascii_string([?a..?z], min: 2)) |> concat(string("ab"))
+
+    defparsecp :lookahead_not_sliced,
+               lookahead_not(ascii_string([?a..?z], min: 2)) |> concat(string("12"))
+
+    defparsecp :choice_sliced,
+               choice([ascii_string([?a..?z], min: 2), ascii_string([?0..?9], min: 2)])
+
+    # These combinators build their error message from the labels of what they
+    # wrap. A repeated character class names the class once, regardless of `min`.
+    @lower "ASCII character in the range \"a\" to \"z\""
+    @digit "ASCII character in the range \"0\" to \"9\""
+
+    test "lookahead names the character class once" do
+      assert lookahead_sliced("abc") == {:ok, ["ab"], "c", %{}, {1, 0}, 2}
+
+      assert lookahead_sliced("1ab") ==
+               {:error, "expected " <> @lower, "1ab", %{}, {1, 0}, 0}
+
+      assert lookahead_sliced("a") == {:error, "expected " <> @lower, "a", %{}, {1, 0}, 0}
+    end
+
+    test "lookahead_not names the character class once" do
+      assert lookahead_not_sliced("12") == {:ok, ["12"], "", %{}, {1, 0}, 2}
+
+      assert lookahead_not_sliced("ab12") ==
+               {:error, "did not expect " <> @lower, "ab12", %{}, {1, 0}, 0}
+    end
+
+    test "choice names each character class once" do
+      assert choice_sliced("abc") == {:ok, ["abc"], "", %{}, {1, 0}, 3}
+      assert choice_sliced("12x") == {:ok, ["12"], "x", %{}, {1, 0}, 2}
+
+      assert choice_sliced("!") ==
+               {:error, "expected #{@lower} or #{@digit}", "!", %{}, {1, 0}, 0}
     end
   end
 
