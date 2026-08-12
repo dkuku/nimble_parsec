@@ -1638,6 +1638,28 @@ defmodule NimbleParsecTest do
     end
   end
 
+  describe "generated guards" do
+    test "spell codepoints out as literals" do
+      assert guard_source(ascii_char([?a..?f])) =~ "x0 >= ?a and x0 <= ?f"
+      assert guard_source(ascii_char([?\s, ?\n])) =~ "x0 === ?\\s or x0 === ?\\n"
+      assert guard_source(ascii_char([?\t, ?\r])) =~ "x0 === ?\\t or x0 === ?\\r"
+      assert guard_source(ascii_char([?\\, ?~])) =~ "x0 === ?\\\\ or x0 === ?~"
+      assert guard_source(ascii_char(not: ?q)) =~ "x0 !== ?q"
+
+      # Codepoints with no printable spelling are spelled in hex, a byte wide at
+      # the least so that every byte reads as two digits.
+      assert guard_source(ascii_char([0x00, 0x1B])) =~ "x0 === 0x00 or x0 === 0x1B"
+      assert guard_source(utf8_char([?é, ?ą])) =~ "x0 === 0xE9 or x0 === 0x105"
+      assert guard_source(utf8_char([0x1F600, 0x1F601])) =~ "x0 === 0x1F600 or x0 === 0x1F601"
+    end
+
+    defp guard_source(combinator) do
+      {defs, _inline} = NimbleParsec.Compiler.compile(:literals, combinator, [])
+
+      Enum.map_join(defs, "\n", fn {_name, _args, guards, _body} -> Macro.to_string(guards) end)
+    end
+  end
+
   describe "continuing parser" do
     defparsecp :digits, [?0..?9] |> ascii_char() |> times(min: 1) |> label("digits")
     defparsecp :chars, [?a..?z] |> ascii_char() |> times(min: 1) |> label("chars")
