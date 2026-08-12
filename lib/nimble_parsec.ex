@@ -151,17 +151,17 @@ defmodule NimbleParsec do
               name: name,
               combinator: combinator
             ] do
-        {defs, inline} = NimbleParsec.Compiler.compile(name, combinator, opts)
-
-        NimbleParsec.Recorder.record(
-          __MODULE__,
-          parser_kind,
-          combinator_kind,
-          name,
-          defs,
-          inline,
-          opts
-        )
+        # One call, since every expression here is inlined once per parser.
+        {defs, inline} =
+          NimbleParsec.Compiler.compile_into(
+            __MODULE__,
+            __ENV__.file,
+            parser_kind,
+            combinator_kind,
+            name,
+            combinator,
+            opts
+          )
 
         if opts[:export_metadata] do
           def __nimble_parsec__(unquote(name)),

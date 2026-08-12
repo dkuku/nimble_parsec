@@ -62,19 +62,19 @@ MyParser.datetime("2010-04-17T14:12:34Z")
 ```
 
 If you add `debug: true` to `defparsec/3`, it will print the generated
-clauses, which are shown below:
+clauses, preceded by the character guards they share, as shown below:
 
 ```elixir
+defguardp ascii_digit(char) when char >= ?0 and char <= ?9
+
 defp datetime__0(<<x0, x1, x2, x3, "-", x4, x5, "-", x6, x7, "T",
                    x8, x9, ":", x10, x11, ":", x12, x13, rest::binary>>,
                  acc, stack, comb__context, comb__line, comb__column)
-     when x0 >= ?0 and x0 <= ?9 and (x1 >= ?0 and x1 <= ?9) and
-         (x2 >= ?0 and x2 <= ?9) and (x3 >= ?0 and x3 <= ?9) and
-         (x4 >= ?0 and x4 <= ?9) and (x5 >= ?0 and x5 <= ?9) and
-         (x6 >= ?0 and x6 <= ?9) and (x7 >= ?0 and x7 <= ?9) and
-         (x8 >= ?0 and x8 <= ?9) and (x9 >= ?0 and x9 <= ?9) and
-         (x10 >= ?0 and x10 <= ?9) and (x11 >= ?0 and x11 <= ?9) and
-         (x12 >= ?0 and x12 <= ?9) and (x13 >= ?0 and x13 <= ?9) do
+     when ascii_digit(x0) and ascii_digit(x1) and ascii_digit(x2) and
+          ascii_digit(x3) and ascii_digit(x4) and ascii_digit(x5) and
+          ascii_digit(x6) and ascii_digit(x7) and ascii_digit(x8) and
+          ascii_digit(x9) and ascii_digit(x10) and ascii_digit(x11) and
+          ascii_digit(x12) and ascii_digit(x13) do
   datetime__1(
     rest,
     [(x13 - 48) * 1 + (x12 - 48) * 10, (x11 - 48) * 1 + (x10 - 48) * 10,

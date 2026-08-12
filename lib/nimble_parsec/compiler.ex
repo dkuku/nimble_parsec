@@ -68,22 +68,22 @@ defmodule NimbleParsec.Compiler do
   @doc """
   Compiles the given combinators into multiple definitions.
   """
-  def compile(name, [], _opts) do
+  def compile(name, [], _opts, _char_guards) do
     raise ArgumentError, "cannot compile #{inspect(name)} with an empty parser combinator"
   end
 
-  def compile(name, combinators, opts) when is_list(combinators) do
+  def compile(name, combinators, opts, char_guards) when is_list(combinators) do
     inline? = Keyword.get(opts, :inline, false)
-    {defs, inline} = compile(name, combinators)
+    {defs, inline, new_char_guards, char_guards} = compile(name, combinators, char_guards)
 
     if inline? do
-      {defs, inline}
+      {defs, inline, new_char_guards, char_guards}
     else
-      {defs, []}
+      {defs, [], new_char_guards, char_guards}
     end
   end
 
-  defp compile(name, combinators) do
+  defp compile(name, combinators, char_guards) do
     config = %{
       acc_depth: 0,
       catch_all: nil,
@@ -99,7 +99,10 @@ defmodule NimbleParsec.Compiler do
       |> Enum.reverse()
       |> compile([], [], next, step, config)
 
-    {Enum.reverse([build_ok(last) | defs]), [{last, @arity} | inline]}
+    {defs, new_char_guards, char_guards} =
+      extract_char_guards(Enum.reverse([build_ok(last) | defs]), char_guards)
+
+    {defs, [{last, @arity} | inline], new_char_guards, char_guards}
   end
 
   defp compile([], defs, inline, current, step, _config) do
@@ -254,7 +257,7 @@ defmodule NimbleParsec.Compiler do
       quote(do: [unquote(rest), orig, unquote_splicing(count), acc, stack, context, line, offset])
     end
 
-    guards = compile_bin_ranges(var, inclusive, exclusive)
+    guards = maybe_char_guard(var, inclusive, exclusive, modifier)
     guards = if max, do: guards ++ [quote(do: count < unquote(max - min))], else: guards
 
     recur_def =
@@ -935,7 +938,7 @@ defmodule NimbleParsec.Compiler do
 
     {var, counter} = build_var(counter)
     input = apply_bin_modifier(var, modifier)
-    guards = compile_bin_ranges(var, inclusive, exclusive)
+    guards = maybe_char_guard(var, inclusive, exclusive, modifier)
 
     offset =
       if modifier == :integer do
@@ -1143,6 +1146,139 @@ defmodule NimbleParsec.Compiler do
 
   defp label({:bytes, count}) do
     "#{inspect(count)} bytes"
+  end
+
+  ## Character guards
+
+  # Below this many comparisons, expanding is shorter than calling a guard.
+  @char_guard_threshold 3
+
+  @char_guard_classes %{
+    [?0..?9] => :digit,
+    [?a..?z] => :lower,
+    [?A..?Z] => :upper,
+    [?a..?z, ?A..?Z] => :alpha,
+    [?a..?z, ?A..?Z, ?0..?9] => :alnum,
+    [?0..?9, ?a..?f, ?A..?F] => :hex,
+    [?\s, ?\t, ?\n, ?\r] => :space
+  }
+
+  defp maybe_char_guard(var, inclusive, exclusive, modifier) do
+    inclusive = Enum.map(inclusive, &ascending/1)
+    exclusive = Enum.map(exclusive, &ascending/1)
+
+    if char_guard_class(inclusive, exclusive) ||
+         comparisons(inclusive, exclusive) >= @char_guard_threshold do
+      [{:__char_guard__, [], [{modifier, inclusive, exclusive}, var]}]
+    else
+      compile_bin_ranges(var, inclusive, exclusive)
+    end
+  end
+
+  # So both spellings share a guard. Nothing else is reordered: the order given
+  # is the order compared.
+  defp ascending({:not, range}), do: {:not, ascending(range)}
+  defp ascending(min..max//-1), do: max..min//1
+  defp ascending(range), do: range
+
+  defp char_guard_class(inclusive, []), do: @char_guard_classes[inclusive]
+  defp char_guard_class(_inclusive, _exclusive), do: nil
+
+  defp comparisons(inclusive, exclusive) do
+    Enum.reduce(inclusive ++ exclusive, 0, &(&2 + range_comparisons(&1)))
+  end
+
+  defp range_comparisons({:not, range}), do: range_comparisons(range)
+  defp range_comparisons(_.._//_), do: 2
+  defp range_comparisons(char) when is_integer(char), do: 1
+
+  defp extract_char_guards(defs, char_guards) do
+    {defs, {char_guards, new}} =
+      Enum.map_reduce(defs, {char_guards, []}, fn {name, args, guards, body}, acc ->
+        {guards, acc} = Macro.prewalk(guards, acc, &replace_char_guard/2)
+        {{name, args, guards, body}, acc}
+      end)
+
+    {defs, Enum.reverse(new), char_guards}
+  end
+
+  defp replace_char_guard({:__char_guard__, _, [key, var]}, {char_guards, new}) do
+    case char_guards do
+      %{^key => name} ->
+        {{name, [], [var]}, {char_guards, new}}
+
+      %{} ->
+        name = char_guard_name(key)
+        {{name, [], [var]}, {Map.put(char_guards, key, name), [{name, key} | new]}}
+    end
+  end
+
+  defp replace_char_guard(node, acc) do
+    {node, acc}
+  end
+
+  # Names are derived from the ranges themselves, so the same set always gets the
+  # same guard, regardless of the order parsers are compiled in.
+  defp char_guard_name({modifier, inclusive, exclusive}) do
+    prefix = if modifier == :integer, do: "ascii", else: modifier
+
+    case char_guard_class(inclusive, exclusive) do
+      nil -> :"#{prefix}_char_#{char_guard_hash(inclusive, exclusive)}"
+      class -> :"#{prefix}_#{class}"
+    end
+  end
+
+  defp char_guard_hash(inclusive, exclusive) do
+    {inclusive, exclusive}
+    |> :erlang.term_to_binary()
+    |> :erlang.md5()
+    |> binary_part(0, 8)
+    |> Base.encode16(case: :lower)
+  end
+
+  @doc """
+  Compiles `combinator` into `module`, recording it and defining its guards.
+
+  The definitions returned have to be added after the guards, which are macros.
+  """
+  def compile_into(module, file, parser_kind, combinator_kind, name, combinator, opts) do
+    char_guards = Module.get_attribute(module, :nimble_parsec_char_guards) || %{}
+    {defs, inline, new_char_guards, char_guards} = compile(name, combinator, opts, char_guards)
+    Module.put_attribute(module, :nimble_parsec_char_guards, char_guards)
+
+    NimbleParsec.Recorder.record(
+      module,
+      parser_kind,
+      combinator_kind,
+      name,
+      defs,
+      inline,
+      new_char_guards,
+      opts
+    )
+
+    define_char_guards(module, file, new_char_guards)
+    {defs, inline}
+  end
+
+  defp define_char_guards(module, file, char_guards) do
+    # As options rather than `__ENV__`, which would inline a literal env per parser.
+    env = [module: module, file: file]
+    Enum.each(char_guards, &Code.eval_quoted(char_guard_definition(&1), [], env))
+  end
+
+  @doc """
+  Returns the quoted `defguardp` for a character guard returned by `compile/4`.
+  """
+  def char_guard_definition({name, {_modifier, inclusive, exclusive}}) do
+    var = Macro.var(:char, nil)
+
+    body =
+      var
+      |> compile_bin_ranges(inclusive, exclusive)
+      |> guards_list_to_quoted()
+
+    quote(do: defguardp(unquote({name, [], [var]}) when unquote(body)))
   end
 
   ## Bin segments

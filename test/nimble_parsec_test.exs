@@ -1646,17 +1646,206 @@ defmodule NimbleParsecTest do
       assert guard_source(ascii_char([?\\, ?~])) =~ "x0 === ?\\\\ or x0 === ?~"
       assert guard_source(ascii_char(not: ?q)) =~ "x0 !== ?q"
 
-      # Codepoints with no printable spelling are spelled in hex, a byte wide at
-      # the least so that every byte reads as two digits.
+      # Codepoints with no printable spelling are spelled in hex, a byte wide.
       assert guard_source(ascii_char([0x00, 0x1B])) =~ "x0 === 0x00 or x0 === 0x1B"
       assert guard_source(utf8_char([?é, ?ą])) =~ "x0 === 0xE9 or x0 === 0x105"
       assert guard_source(utf8_char([0x1F600, 0x1F601])) =~ "x0 === 0x1F600 or x0 === 0x1F601"
     end
 
     defp guard_source(combinator) do
-      {defs, _inline} = NimbleParsec.Compiler.compile(:literals, combinator, [])
+      {defs, _inline, _new, _seen} =
+        NimbleParsec.Compiler.compile(:literals, combinator, [], %{})
 
       Enum.map_join(defs, "\n", fn {_name, _args, guards, _body} -> Macro.to_string(guards) end)
+    end
+  end
+
+  describe "character guards" do
+    defparsecp :guarded_alnum, ascii_string([?a..?z, ?A..?Z, ?0..?9], 3)
+    defparsecp :guarded_except, ascii_char([?a..?z, ?A..?Z, not: ?q])
+    defparsecp :guarded_symbols, ascii_char([?!, ?-, ?~])
+    defparsecp :guarded_utf8, utf8_char([?à..?ż, ?a..?z, not: ?q])
+    defparsecp :guarded_empty, ascii_char([?z..?a//1])
+    defparsecp :guarded_with_empty, ascii_char([?z..?a//1, ?0..?9, ?A..?F])
+    defparsecp :digit_chars, ascii_char([?0..?5, ?a..?z])
+    defparsecp :raw_codepoints, ascii_char([0..5, ?a..?z])
+    defparsecp :order_as_given, ascii_char([?0..?9, ?a..?s, ?v..?w, ?y..?z])
+    defparsecp :order_shuffled, ascii_char([?y..?z, ?v..?w, ?a..?s, ?0..?9])
+    defparsecp :order_descending, ascii_char([?z..?y//-1, ?w..?v//-1, ?s..?a//-1, ?9..?0//-1])
+
+    test "keep the parser semantics" do
+      assert guarded_alnum("aZ9") == {:ok, ["aZ9"], "", %{}, {1, 0}, 3}
+      assert {:error, _, "a!9", %{}, {1, 0}, 0} = guarded_alnum("a!9")
+
+      assert guarded_except("p") == {:ok, ~c"p", "", %{}, {1, 0}, 1}
+      assert {:error, _, "q", %{}, {1, 0}, 0} = guarded_except("q")
+
+      assert guarded_symbols("~") == {:ok, ~c"~", "", %{}, {1, 0}, 1}
+      assert {:error, _, "a", %{}, {1, 0}, 0} = guarded_symbols("a")
+
+      assert guarded_utf8("ż") == {:ok, ~c"ż", "", %{}, {1, 0}, 2}
+      assert guarded_utf8("a") == {:ok, ~c"a", "", %{}, {1, 0}, 1}
+      assert {:error, _, "q", %{}, {1, 0}, 0} = guarded_utf8("q")
+      assert {:error, _, "Ω", %{}, {1, 0}, 0} = guarded_utf8("Ω")
+    end
+
+    test "keep an empty range matching nothing" do
+      # Dropped instead of compiled, it would match anything rather than nothing.
+      assert {:error, _, "q", %{}, {1, 0}, 0} = guarded_empty("q")
+      assert {:error, _, "z", %{}, {1, 0}, 0} = guarded_empty("z")
+
+      assert guarded_with_empty("5") == {:ok, ~c"5", "", %{}, {1, 0}, 1}
+      assert {:error, _, "q", %{}, {1, 0}, 0} = guarded_with_empty("q")
+    end
+
+    test "are named after the well-known class they match" do
+      assert [{:ascii_digit, _}] = guards_for(ascii_char([?0..?9]))
+      assert [{:ascii_lower, _}] = guards_for(ascii_char([?a..?z]))
+      assert [{:ascii_upper, _}] = guards_for(ascii_char([?A..?Z]))
+      assert [{:ascii_alpha, _}] = guards_for(ascii_char([?a..?z, ?A..?Z]))
+      assert [{:ascii_alnum, _}] = guards_for(ascii_char([?a..?z, ?A..?Z, ?0..?9]))
+      assert [{:ascii_hex, _}] = guards_for(ascii_char([?0..?9, ?a..?f, ?A..?F]))
+      assert [{:ascii_space, _}] = guards_for(ascii_char([?\s, ?\t, ?\n, ?\r]))
+
+      # The modifier still separates them, since the guards are not the same.
+      assert [{:utf8_alnum, _}] = guards_for(utf8_char([?a..?z, ?A..?Z, ?0..?9]))
+    end
+
+    test "are named after a hash of the ranges otherwise" do
+      # A class spelled in another order is a different guard, and so is one
+      # narrowed by an exclusive range.
+      assert [{shuffled, _}] = guards_for(ascii_char([?0..?9, ?A..?Z, ?a..?z]))
+      assert [{excluded, _}] = guards_for(ascii_char([?a..?z, ?A..?Z, ?0..?9, not: ?q]))
+
+      assert Atom.to_string(shuffled) =~ ~r/^ascii_char_[0-9a-f]{16}$/
+      assert Atom.to_string(excluded) =~ ~r/^ascii_char_[0-9a-f]{16}$/
+      refute shuffled == excluded
+
+      assert [{name, _}] = guards_for(utf8_char([?à..?ż, ?a..?z]))
+      assert Atom.to_string(name) =~ ~r/^utf8_char_[0-9a-f]{16}$/
+    end
+
+    test "collapse a descending range onto its ascending counterpart" do
+      assert [{name, key}] = guards_for(ascii_char([?a..?z, ?A..?Z, ?0..?5]))
+      assert [{^name, ^key}] = guards_for(ascii_char([?z..?a//-1, ?Z..?A//-1, ?5..?0//-1]))
+    end
+
+    test "are not emitted for ranges cheaper to expand inline" do
+      assert [] = guards_for(ascii_char([?a, ?b]))
+      assert [] = guards_for(ascii_char([?a..?f]))
+      assert [] = guards_for(ascii_char(not: ?q))
+    end
+
+    test "compare the ranges in the order they were given" do
+      # The comparisons short-circuit, so the order is the caller's to choose.
+      assert compared_codepoints(ascii_char([?a..?z, ?A..?Z])) == [?a, ?z, ?A, ?Z]
+      assert compared_codepoints(ascii_char([?A..?Z, ?a..?z])) == [?A, ?Z, ?a, ?z]
+
+      assert compared_codepoints(ascii_char([?A..?Z, ?a..?z, not: ?q])) ==
+               [?A, ?Z, ?a, ?z, ?q]
+    end
+
+    test "match the same codepoints whatever order the ranges are given in" do
+      expected = Enum.to_list(?0..?9) ++ Enum.to_list(?a..?s) ++ [?v, ?w, ?y, ?z]
+
+      assert accepted_by(&order_as_given/1) == expected
+      assert accepted_by(&order_shuffled/1) == expected
+      assert accepted_by(&order_descending/1) == expected
+    end
+
+    test "tell a character range apart from the codepoints numbering it" do
+      assert [{chars, _}] = guards_for(ascii_char([?0..?5, ?a..?z]))
+      assert [{codepoints, _}] = guards_for(ascii_char([0..5, ?a..?z]))
+      refute chars == codepoints
+
+      assert accepted_by(&digit_chars/1) == Enum.to_list(?0..?5) ++ Enum.to_list(?a..?z)
+      assert accepted_by(&raw_codepoints/1) == Enum.to_list(0..5) ++ Enum.to_list(?a..?z)
+    end
+
+    test "are shared by every parser using the same ranges" do
+      ranges = [?a..?z, ?A..?Z, ?0..?9]
+      assert {_, _, [{name, _}], seen} = compile_with_guards(ascii_char(ranges))
+
+      assert {_, _, [], ^seen} =
+               NimbleParsec.Compiler.compile(:reuse, ascii_char(ranges), [], seen)
+
+      assert seen == %{{:integer, ranges, []} => name}
+    end
+
+    test "are never left as a placeholder in a definition" do
+      ranges = [?a..?z, ?A..?Z, ?0..?9]
+
+      combinators = [
+        ascii_char(ranges),
+        ascii_char(ranges) |> concat(utf8_char(ranges)),
+        ascii_string(ranges, min: 1),
+        ascii_string(ranges, 3),
+        utf8_string(ranges, max: 3),
+        optional(ascii_char(ranges)),
+        repeat(ascii_char(ranges)),
+        times(ascii_char(ranges), min: 2),
+        lookahead(ascii_char(ranges)),
+        lookahead_not(ascii_char(ranges)),
+        eventually(ascii_char(ranges)),
+        choice([ascii_char(ranges), ascii_char([?0..?9, ?x, ?y])]),
+        ascii_char(ranges) |> label("labelled"),
+        ascii_char(ranges) |> map({String, :to_string, []})
+      ]
+
+      for combinator <- combinators do
+        {defs, _inline, new, _seen} = compile_with_guards(combinator)
+        assert new != []
+
+        # A surviving placeholder is a compile error in the generated module.
+        refute inspect(defs) =~ "__char_guard__"
+      end
+    end
+
+    test "are printed ahead of the definitions using them on :debug" do
+      output =
+        ExUnit.CaptureIO.capture_io(fn ->
+          Code.compile_string("""
+          defmodule DebuggedGuards do
+            import NimbleParsec
+            defparsecp :first, ascii_char([?a..?z, ?A..?Z, ?0..?9]), debug: true
+            defparsecp :second, ascii_char([?a..?z, ?A..?Z, ?0..?9]), debug: true
+          end
+          """)
+        end)
+
+      assert [first, second] = String.split(output, "defp second__0", parts: 2)
+      assert [before_defs, _] = String.split(first, "defp first__0", parts: 2)
+      assert before_defs =~ "defguardp ascii_alnum(char)"
+
+      # Only the parser introducing it prints it.
+      refute second =~ "defguardp"
+      assert second =~ "when ascii_alnum(x0)"
+    end
+
+    defp accepted_by(parser) do
+      for char <- 0..127, match?({:ok, _, _, _, _, _}, parser.(<<char>>)), do: char
+    end
+
+    defp compile_with_guards(combinator, char_guards \\ %{}) do
+      NimbleParsec.Compiler.compile(:guarded, combinator, [], char_guards)
+    end
+
+    defp guards_for(combinator) do
+      {_defs, _inline, new, _seen} = compile_with_guards(combinator)
+      new
+    end
+
+    defp compared_codepoints(combinator) do
+      [guard] = guards_for(combinator)
+
+      guard
+      |> NimbleParsec.Compiler.char_guard_definition()
+      |> Macro.prewalk([], fn
+        node, acc when is_integer(node) -> {node, [node | acc]}
+        node, acc -> {node, acc}
+      end)
+      |> elem(1)
+      |> Enum.reverse()
     end
   end
 
@@ -1686,14 +1875,14 @@ defmodule NimbleParsecTest do
   end
 
   defp bound?(document) do
-    {defs, _} = NimbleParsec.Compiler.compile(:not_used, document, [])
+    {defs, _, _, _} = NimbleParsec.Compiler.compile(:not_used, document, [], %{})
 
     assert length(defs) == 3,
            "Expected #{inspect(document)} to contain 3 clauses, got #{length(defs)}"
   end
 
   defp not_bound?(document) do
-    {defs, _} = NimbleParsec.Compiler.compile(:not_used, document, [])
+    {defs, _, _, _} = NimbleParsec.Compiler.compile(:not_used, document, [], %{})
 
     assert length(defs) != 3, "Expected #{inspect(document)} to contain greater than 3 clauses"
   end

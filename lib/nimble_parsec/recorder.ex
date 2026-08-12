@@ -20,23 +20,36 @@ defmodule NimbleParsec.Recorder do
   @doc """
   Records the given call and potentially debugs it.
   """
-  def record(module, parser_kind, combinator_kind, name, combinators, inline, opts) do
+  def record(module, parser_kind, combinator_kind, name, combinators, inline, char_guards, opts) do
     inline? = Keyword.get(opts, :inline, false)
 
     if Keyword.get(opts, :debug, false) do
-      IO.puts(format_defs(combinator_kind, combinators, inline, inline?))
+      IO.puts([
+        format_char_guards(char_guards),
+        format_defs(combinator_kind, combinators, inline, inline?)
+      ])
     end
 
     if Process.whereis(@name) do
       Agent.update(@name, fn state ->
         update_in(
           state[module],
-          &[{parser_kind, combinator_kind, name, combinators, inline, inline?} | &1 || []]
+          &[
+            {parser_kind, combinator_kind, name, combinators, inline, inline?, char_guards}
+            | &1 || []
+          ]
         )
       end)
     end
 
     :ok
+  end
+
+  defp format_char_guards(char_guards) do
+    Enum.map(char_guards, fn char_guard ->
+      definition = NimbleParsec.Compiler.char_guard_definition(char_guard)
+      [Macro.to_string(definition), "\n\n"]
+    end)
   end
 
   defp format_parser_kind(nil, _name) do
@@ -104,8 +117,15 @@ defmodule NimbleParsec.Recorder do
 
       case String.split(acc, marker) do
         [pre, _middle, pos] ->
+          # Guards are macros: they have to precede every definition using them.
+          char_guards =
+            entries
+            |> Enum.reverse()
+            |> Enum.flat_map(fn entry -> elem(entry, 6) end)
+            |> format_char_guards()
+
           replacement = Enum.map(entries, &format_recorded/1)
-          IO.iodata_to_binary([pre, replacement, pos])
+          IO.iodata_to_binary([pre, char_guards, replacement, pos])
 
         [_, _] ->
           raise ArgumentError, "expected 2 markers #{inspect(marker)} on #{inspect(id)}, got 1"
@@ -116,7 +136,9 @@ defmodule NimbleParsec.Recorder do
     end)
   end
 
-  defp format_recorded({parser_kind, combinator_kind, name, combinators, inline, inline?}) do
+  defp format_recorded(
+         {parser_kind, combinator_kind, name, combinators, inline, inline?, _guards}
+       ) do
     [
       format_parser_kind(parser_kind, name)
       | format_defs(combinator_kind, combinators, inline, inline?)
