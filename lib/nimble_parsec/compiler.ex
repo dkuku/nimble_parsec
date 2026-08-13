@@ -68,11 +68,11 @@ defmodule NimbleParsec.Compiler do
   @doc """
   Compiles the given combinators into multiple definitions.
   """
-  def compile(name, [], _opts, _char_guards) do
+  def compile(name, [], _char_guards, _opts) do
     raise ArgumentError, "cannot compile #{inspect(name)} with an empty parser combinator"
   end
 
-  def compile(name, combinators, opts, char_guards) when is_list(combinators) do
+  def compile(name, combinators, char_guards, opts) when is_list(combinators) do
     inline? = Keyword.get(opts, :inline, false)
     {defs, inline, new_char_guards, char_guards} = compile(name, combinators, char_guards)
 
@@ -1218,13 +1218,15 @@ defmodule NimbleParsec.Compiler do
   end
 
   # Names are derived from the ranges themselves, so the same set always gets the
-  # same guard, regardless of the order parsers are compiled in.
+  # same guard, regardless of the order parsers are compiled in. They are prefixed
+  # with underscores to stay short while keeping out of the way of the names the
+  # module they are defined in may use for itself.
   defp char_guard_name({modifier, inclusive, exclusive}) do
     prefix = if modifier == :integer, do: "ascii", else: modifier
 
     case char_guard_class(inclusive, exclusive) do
-      nil -> :"#{prefix}_char_#{char_guard_hash(inclusive, exclusive)}"
-      class -> :"#{prefix}_#{class}"
+      nil -> :"__#{prefix}_char_#{char_guard_hash(inclusive, exclusive)}"
+      class -> :"__#{prefix}_#{class}"
     end
   end
 
@@ -1243,7 +1245,7 @@ defmodule NimbleParsec.Compiler do
   """
   def compile_into(module, file, parser_kind, combinator_kind, name, combinator, opts) do
     char_guards = Module.get_attribute(module, :nimble_parsec_char_guards) || %{}
-    {defs, inline, new_char_guards, char_guards} = compile(name, combinator, opts, char_guards)
+    {defs, inline, new_char_guards, char_guards} = compile(name, combinator, char_guards, opts)
     Module.put_attribute(module, :nimble_parsec_char_guards, char_guards)
 
     NimbleParsec.Recorder.record(

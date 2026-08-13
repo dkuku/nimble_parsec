@@ -57,18 +57,18 @@ defmodule Mix.Tasks.NimbleParsec.CompileTest do
         assert contents =~ "  _pos = :ok\nend"
 
         # Emitted once per module, shared by every parser using the same ranges.
-        assert contents =~ "defguardp ascii_alnum(char)"
-        assert length(String.split(contents, "defguardp ascii_alnum(char)")) == 2
-        assert contents =~ "when ascii_alnum(x0)"
+        assert contents =~ "defguardp __ascii_alnum(char)"
+        assert length(String.split(contents, "defguardp __ascii_alnum(char)")) == 2
+        assert contents =~ "when __ascii_alnum(x0)"
 
         # Ahead of the first definition, not merely of the ones needing it.
         assert [guards, defs] = String.split(contents, "@doc \"\"\"", parts: 2)
-        assert guards =~ "defguardp ascii_lower(char)"
-        assert guards =~ "defguardp ascii_digit(char)"
+        assert guards =~ "defguardp __ascii_lower(char)"
+        assert guards =~ "defguardp __ascii_digit(char)"
         refute defs =~ "defguardp "
 
         # Ranges below the threshold stay expanded: the call would be longer.
-        refute contents =~ "defguardp ascii_char_"
+        refute contents =~ "defguardp __ascii_char_"
       end)
 
       # Ensure the output is also compilable.

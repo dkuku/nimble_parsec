@@ -1654,7 +1654,7 @@ defmodule NimbleParsecTest do
 
     defp guard_source(combinator) do
       {defs, _inline, _new, _seen} =
-        NimbleParsec.Compiler.compile(:literals, combinator, [], %{})
+        NimbleParsec.Compiler.compile(:literals, combinator, %{}, [])
 
       Enum.map_join(defs, "\n", fn {_name, _args, guards, _body} -> Macro.to_string(guards) end)
     end
@@ -1699,16 +1699,17 @@ defmodule NimbleParsecTest do
     end
 
     test "are named after the well-known class they match" do
-      assert [{:ascii_digit, _}] = guards_for(ascii_char([?0..?9]))
-      assert [{:ascii_lower, _}] = guards_for(ascii_char([?a..?z]))
-      assert [{:ascii_upper, _}] = guards_for(ascii_char([?A..?Z]))
-      assert [{:ascii_alpha, _}] = guards_for(ascii_char([?a..?z, ?A..?Z]))
-      assert [{:ascii_alnum, _}] = guards_for(ascii_char([?a..?z, ?A..?Z, ?0..?9]))
-      assert [{:ascii_hex, _}] = guards_for(ascii_char([?0..?9, ?a..?f, ?A..?F]))
-      assert [{:ascii_space, _}] = guards_for(ascii_char([?\s, ?\t, ?\n, ?\r]))
+      assert [{:__ascii_digit, _}] = guards_for(ascii_char([?0..?9]))
+      assert [{:__ascii_lower, _}] = guards_for(ascii_char([?a..?z]))
+      assert [{:__ascii_upper, _}] = guards_for(ascii_char([?A..?Z]))
+      assert [{:__ascii_alpha, _}] = guards_for(ascii_char([?a..?z, ?A..?Z]))
+      assert [{:__ascii_alnum, _}] = guards_for(ascii_char([?a..?z, ?A..?Z, ?0..?9]))
+      assert [{:__ascii_hex, _}] = guards_for(ascii_char([?0..?9, ?a..?f, ?A..?F]))
+      assert [{:__ascii_space, _}] = guards_for(ascii_char([?\s, ?\t, ?\n, ?\r]))
 
-      # The modifier still separates them, since the guards are not the same.
-      assert [{:utf8_alnum, _}] = guards_for(utf8_char([?a..?z, ?A..?Z, ?0..?9]))
+      # The modifier still separates them, so that the name says which combinator
+      # the guard was introduced for.
+      assert [{:__utf8_alnum, _}] = guards_for(utf8_char([?a..?z, ?A..?Z, ?0..?9]))
     end
 
     test "are named after a hash of the ranges otherwise" do
@@ -1717,12 +1718,12 @@ defmodule NimbleParsecTest do
       assert [{shuffled, _}] = guards_for(ascii_char([?0..?9, ?A..?Z, ?a..?z]))
       assert [{excluded, _}] = guards_for(ascii_char([?a..?z, ?A..?Z, ?0..?9, not: ?q]))
 
-      assert Atom.to_string(shuffled) =~ ~r/^ascii_char_[0-9a-f]{16}$/
-      assert Atom.to_string(excluded) =~ ~r/^ascii_char_[0-9a-f]{16}$/
+      assert Atom.to_string(shuffled) =~ ~r/^__ascii_char_[0-9a-f]{16}$/
+      assert Atom.to_string(excluded) =~ ~r/^__ascii_char_[0-9a-f]{16}$/
       refute shuffled == excluded
 
       assert [{name, _}] = guards_for(utf8_char([?à..?ż, ?a..?z]))
-      assert Atom.to_string(name) =~ ~r/^utf8_char_[0-9a-f]{16}$/
+      assert Atom.to_string(name) =~ ~r/^__utf8_char_[0-9a-f]{16}$/
     end
 
     test "collapse a descending range onto its ascending counterpart" do
@@ -1767,7 +1768,7 @@ defmodule NimbleParsecTest do
       assert {_, _, [{name, _}], seen} = compile_with_guards(ascii_char(ranges))
 
       assert {_, _, [], ^seen} =
-               NimbleParsec.Compiler.compile(:reuse, ascii_char(ranges), [], seen)
+               NimbleParsec.Compiler.compile(:reuse, ascii_char(ranges), seen, [])
 
       assert seen == %{{:integer, ranges, []} => name}
     end
@@ -1815,11 +1816,11 @@ defmodule NimbleParsecTest do
 
       assert [first, second] = String.split(output, "defp second__0", parts: 2)
       assert [before_defs, _] = String.split(first, "defp first__0", parts: 2)
-      assert before_defs =~ "defguardp ascii_alnum(char)"
+      assert before_defs =~ "defguardp __ascii_alnum(char)"
 
       # Only the parser introducing it prints it.
       refute second =~ "defguardp"
-      assert second =~ "when ascii_alnum(x0)"
+      assert second =~ "when __ascii_alnum(x0)"
     end
 
     defp accepted_by(parser) do
@@ -1827,7 +1828,7 @@ defmodule NimbleParsecTest do
     end
 
     defp compile_with_guards(combinator, char_guards \\ %{}) do
-      NimbleParsec.Compiler.compile(:guarded, combinator, [], char_guards)
+      NimbleParsec.Compiler.compile(:guarded, combinator, char_guards, [])
     end
 
     defp guards_for(combinator) do
@@ -1875,14 +1876,14 @@ defmodule NimbleParsecTest do
   end
 
   defp bound?(document) do
-    {defs, _, _, _} = NimbleParsec.Compiler.compile(:not_used, document, [], %{})
+    {defs, _, _, _} = NimbleParsec.Compiler.compile(:not_used, document, %{}, [])
 
     assert length(defs) == 3,
            "Expected #{inspect(document)} to contain 3 clauses, got #{length(defs)}"
   end
 
   defp not_bound?(document) do
-    {defs, _, _, _} = NimbleParsec.Compiler.compile(:not_used, document, [], %{})
+    {defs, _, _, _} = NimbleParsec.Compiler.compile(:not_used, document, %{}, [])
 
     assert length(defs) != 3, "Expected #{inspect(document)} to contain greater than 3 clauses"
   end
