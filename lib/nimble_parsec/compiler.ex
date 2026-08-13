@@ -1165,29 +1165,46 @@ defmodule NimbleParsec.Compiler do
   defp bin_range_to_guard(var, range) do
     case range do
       min..min//step when abs(step) == 1 ->
-        quote(do: unquote(var) === unquote(min))
+        quote(do: unquote(var) === unquote(char(min)))
 
       min..max//1 ->
-        quote(do: unquote(var) >= unquote(min) and unquote(var) <= unquote(max))
+        quote(do: unquote(var) >= unquote(char(min)) and unquote(var) <= unquote(char(max)))
 
       min..max//-1 ->
-        quote(do: unquote(var) >= unquote(max) and unquote(var) <= unquote(min))
+        quote(do: unquote(var) >= unquote(char(max)) and unquote(var) <= unquote(char(min)))
 
       min when is_integer(min) ->
-        quote(do: unquote(var) === unquote(min))
+        quote(do: unquote(var) === unquote(char(min)))
 
       {:not, min..min//step} when abs(step) == 1 ->
-        quote(do: unquote(var) !== unquote(min))
+        quote(do: unquote(var) !== unquote(char(min)))
 
       {:not, min..max//1} ->
-        quote(do: unquote(var) < unquote(min) or unquote(var) > unquote(max))
+        quote(do: unquote(var) < unquote(char(min)) or unquote(var) > unquote(char(max)))
 
       {:not, min..max//-1} ->
-        quote(do: unquote(var) < unquote(max) or unquote(var) > unquote(min))
+        quote(do: unquote(var) < unquote(char(max)) or unquote(var) > unquote(char(min)))
 
       {:not, min} when is_integer(min) ->
-        quote(do: unquote(var) !== unquote(min))
+        quote(do: unquote(var) !== unquote(char(min)))
     end
+  end
+
+  # `?a` and `97` are the same AST node, so the literal spelling only survives as
+  # `:token` metadata, which `Macro.to_string/1` honours when printing.
+  defp char(codepoint) do
+    token =
+      case codepoint do
+        ?\\ -> "?\\\\"
+        ?\s -> "?\\s"
+        ?\n -> "?\\n"
+        ?\t -> "?\\t"
+        ?\r -> "?\\r"
+        codepoint when codepoint in ?!..?~ -> "?" <> <<codepoint>>
+        codepoint -> Integer.to_string(codepoint)
+      end
+
+    {:__block__, [token: token], [codepoint]}
   end
 
   defp inspect_bin_range(min..max//_, printable?) do
