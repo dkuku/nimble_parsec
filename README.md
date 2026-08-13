@@ -52,13 +52,16 @@ defmodule MyParser do
     |> integer(2)
     |> ignore(string(":"))
     |> integer(2)
-    |> optional(string("Z"))
 
-  defparsec :datetime, date |> ignore(string("T")) |> concat(time), debug: true
+  # RFC 3339 allows "T", "t" or a space between the date and the time
+  separator = ascii_char([?T, ?t, ?\s])
+  zone = ascii_char([?A..?Z])
+
+  defparsec :datetime, date |> ignore(separator) |> concat(time) |> optional(zone), debug: true
 end
 
 MyParser.datetime("2010-04-17T14:12:34Z")
-#=> {:ok, [2010, 4, 17, 14, 12, 34, "Z"], "", %{}, {1, 0}, 20}
+#=> {:ok, [2010, 4, 17, 14, 12, 34, ?Z], "", %{}, {1, 0}, 20}
 ```
 
 If you add `debug: true` to `defparsec/3`, it will print the generated
@@ -67,40 +70,45 @@ clauses, preceded by the character guards they share, as shown below:
 ```elixir
 defguardp __ascii_digit(char) when char >= ?0 and char <= ?9
 
-defp datetime__0(<<x0, x1, x2, x3, "-", x4, x5, "-", x6, x7, "T",
-                   x8, x9, ":", x10, x11, ":", x12, x13, rest::binary>>,
-                 acc, stack, comb__context, comb__line, comb__column)
+defguardp __ascii_char_T__t__0x20(char) when char === ?T or char === ?t or char === ?\s
+
+defguardp __ascii_upper(char) when char >= ?A and char <= ?Z
+
+defp datetime__0(<<x0, x1, x2, x3, "-", x4, x5, "-", x6, x7, x8, x9, x10, ":",
+                   x11, x12, ":", x13, x14, rest::binary>>,
+                 acc, stack, context, comb__line, comb__offset)
      when __ascii_digit(x0) and __ascii_digit(x1) and __ascii_digit(x2) and
           __ascii_digit(x3) and __ascii_digit(x4) and __ascii_digit(x5) and
-          __ascii_digit(x6) and __ascii_digit(x7) and __ascii_digit(x8) and
+          __ascii_digit(x6) and __ascii_digit(x7) and __ascii_char_T__t__0x20(x8) and
           __ascii_digit(x9) and __ascii_digit(x10) and __ascii_digit(x11) and
-          __ascii_digit(x12) and __ascii_digit(x13) do
+          __ascii_digit(x12) and __ascii_digit(x13) and __ascii_digit(x14) do
   datetime__1(
     rest,
-    [(x13 - 48) * 1 + (x12 - 48) * 10, (x11 - 48) * 1 + (x10 - 48) * 10,
-     (x9 - 48) * 1 + (x8 - 48) * 10, (x7 - 48) * 1 + (x6 - 48) * 10, (x5 - 48) * 1 + (x4 - 48) * 10,
-     (x3 - 48) * 1 + (x2 - 48) * 10 + (x1 - 48) * 100 + (x0 - 48) * 1000] ++ acc,
+    [x14 - 48 + (x13 - 48) * 10, x12 - 48 + (x11 - 48) * 10,
+     x10 - 48 + (x9 - 48) * 10, x7 - 48 + (x6 - 48) * 10, x5 - 48 + (x4 - 48) * 10,
+     x3 - 48 + (x2 - 48) * 10 + (x1 - 48) * 100 + (x0 - 48) * 1000] ++ acc,
     stack,
-    comb__context,
+    context,
     comb__line,
-    comb__column + 19
+    comb__offset + 19
   )
 end
 
-defp datetime__0(rest, acc, _stack, context, line, column) do
-  {:error, "...", rest, context, line, column}
+defp datetime__0(rest, _acc, _stack, context, line, offset) do
+  {:error, "...", rest, context, line, offset}
 end
 
-defp datetime__1(<<"Z", rest::binary>>, acc, stack, comb__context, comb__line, comb__column) do
-  datetime__2(rest, ["Z"] ++ acc, stack, comb__context, comb__line, comb__column + 1)
+defp datetime__1(<<x0, rest::binary>>, acc, stack, context, comb__line, comb__offset)
+     when __ascii_upper(x0) do
+  datetime__2(rest, [x0] ++ acc, stack, context, comb__line, comb__offset + 1)
 end
 
-defp datetime__1(rest, acc, stack, context, line, column) do
-  datetime__2(rest, acc, stack, context, line, column)
+defp datetime__1(<<rest::binary>>, acc, stack, context, comb__line, comb__offset) do
+  datetime__2(rest, [] ++ acc, stack, context, comb__line, comb__offset)
 end
 
-defp datetime__2(rest, acc, _stack, context, line, column) do
-  {:ok, acc, rest, context, line, column}
+defp datetime__2(rest, acc, _stack, context, line, offset) do
+  {:ok, acc, rest, context, line, offset}
 end
 ```
 

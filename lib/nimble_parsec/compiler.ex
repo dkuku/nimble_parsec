@@ -1217,22 +1217,50 @@ defmodule NimbleParsec.Compiler do
     {node, acc}
   end
 
-  # Names are derived from the ranges themselves, so the same set always gets the
-  # same guard, regardless of the order parsers are compiled in. They are prefixed
-  # with underscores to stay short while keeping out of the way of the names the
-  # module they are defined in may use for itself.
-  defp char_guard_name({modifier, inclusive, exclusive}) do
+  @char_guard_body_limit 48
+
+  @doc """
+  Returns the name of the guard matching the given ranges.
+
+  The same ranges always get the same name and no two get one another's, so that
+  parsers can share guards. Underscores keep the name out of the way of the ones
+  the module it is defined in may use for itself.
+  """
+  def char_guard_name({modifier, inclusive, exclusive}) do
     prefix = if modifier == :integer, do: "ascii", else: modifier
 
     case char_guard_class(inclusive, exclusive) do
-      nil -> :"__#{prefix}_char_#{char_guard_hash(inclusive, exclusive)}"
+      nil -> :"__#{prefix}_char_#{char_guard_body(inclusive, exclusive)}"
       class -> :"__#{prefix}_#{class}"
     end
   end
 
-  defp char_guard_hash(inclusive, exclusive) do
-    {inclusive, exclusive}
-    |> :erlang.term_to_binary()
+  # `?a` is `a`, `?-` is `0x2d`, `?a..?z` is `a_z` and `[?a, ?z]` is `a__z`. Nothing
+  # spelling a codepoint can be read as hex or as `not`, so no two sets collide.
+  defp char_guard_body(inclusive, exclusive) do
+    body = Enum.map_join(inclusive ++ exclusive, "__", &char_guard_field/1)
+
+    if byte_size(body) > @char_guard_body_limit do
+      char_guard_hash(body)
+    else
+      body
+    end
+  end
+
+  defp char_guard_field({:not, range}), do: "not_" <> char_guard_field(range)
+  defp char_guard_field(min..max//_), do: "#{char_name(min)}_#{char_name(max)}"
+  defp char_guard_field(char) when is_integer(char), do: char_name(char)
+
+  defp char_name(char) when char in ?0..?9 or char in ?a..?z or char in ?A..?Z, do: <<char>>
+
+  defp char_name(char) do
+    "0x" <> String.pad_leading(String.downcase(Integer.to_string(char, 16)), 2, "0")
+  end
+
+  # The body, not the ranges: `term_to_binary/1` has no ordering guarantee across
+  # releases, and `mix nimble_parsec.compile` writes these names to disk.
+  defp char_guard_hash(body) do
+    body
     |> :erlang.md5()
     |> binary_part(0, 8)
     |> Base.encode16(case: :lower)

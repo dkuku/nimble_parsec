@@ -1707,23 +1707,19 @@ defmodule NimbleParsecTest do
       assert [{:__ascii_hex, _}] = guards_for(ascii_char([?0..?9, ?a..?f, ?A..?F]))
       assert [{:__ascii_space, _}] = guards_for(ascii_char([?\s, ?\t, ?\n, ?\r]))
 
-      # The modifier still separates them, so that the name says which combinator
-      # the guard was introduced for.
+      # The modifier separates them, though the comparisons are the same.
       assert [{:__utf8_alnum, _}] = guards_for(utf8_char([?a..?z, ?A..?Z, ?0..?9]))
     end
 
-    test "are named after a hash of the ranges otherwise" do
+    test "are named after the ranges they match otherwise" do
       # A class spelled in another order is a different guard, and so is one
       # narrowed by an exclusive range.
-      assert [{shuffled, _}] = guards_for(ascii_char([?0..?9, ?A..?Z, ?a..?z]))
-      assert [{excluded, _}] = guards_for(ascii_char([?a..?z, ?A..?Z, ?0..?9, not: ?q]))
+      assert [{:__ascii_char_0_9__A_Z__a_z, _}] = guards_for(ascii_char([?0..?9, ?A..?Z, ?a..?z]))
 
-      assert Atom.to_string(shuffled) =~ ~r/^__ascii_char_[0-9a-f]{16}$/
-      assert Atom.to_string(excluded) =~ ~r/^__ascii_char_[0-9a-f]{16}$/
-      refute shuffled == excluded
+      assert [{:__ascii_char_a_z__A_Z__0_9__not_q, _}] =
+               guards_for(ascii_char([?a..?z, ?A..?Z, ?0..?9, not: ?q]))
 
-      assert [{name, _}] = guards_for(utf8_char([?à..?ż, ?a..?z]))
-      assert Atom.to_string(name) =~ ~r/^__utf8_char_[0-9a-f]{16}$/
+      assert [{:__utf8_char_0xe0_0x17c__a_z, _}] = guards_for(utf8_char([?à..?ż, ?a..?z]))
     end
 
     test "collapse a descending range onto its ascending counterpart" do
@@ -1847,6 +1843,111 @@ defmodule NimbleParsecTest do
       end)
       |> elem(1)
       |> Enum.reverse()
+    end
+  end
+
+  describe "character guard names" do
+    test "spell a codepoint as itself when a function name can hold it" do
+      assert guard_name([?1, ?2, ?3]) == :__ascii_char_1__2__3
+      assert guard_name([?a, ?B, ?9]) == :__ascii_char_a__B__9
+      assert guard_name([?a..?f, ?x]) == :__ascii_char_a_f__x
+    end
+
+    test "spell every other codepoint in hex" do
+      assert guard_name([?!, ?-, ?~]) == :__ascii_char_0x21__0x2d__0x7e
+      assert guard_name([?\s, ?\t, ?\n]) == :__ascii_char_0x20__0x09__0x0a
+      assert guard_name([?_, ?a, ?b]) == :__ascii_char_0x5f__a__b
+      assert guard_name([?à..?ż, ?a], :utf8) == :__utf8_char_0xe0_0x17c__a
+    end
+
+    test "join the bounds of a range by one underscore and ranges by two" do
+      assert guard_name([?a..?b, ?z]) == :__ascii_char_a_b__z
+      assert guard_name([?a, ?b..?z]) == :__ascii_char_a__b_z
+      assert guard_name([?a, ?b, ?z]) == :__ascii_char_a__b__z
+      assert guard_name([0..5, ?a]) == :__ascii_char_0x00_0x05__a
+    end
+
+    test "prefix an excluded range by not" do
+      assert guard_name([?a..?z, not: ?q]) == :__ascii_char_a_z__not_q
+      assert guard_name([?a..?z, ?A, not: ?q..?t]) == :__ascii_char_a_z__A__not_q_t
+    end
+
+    test "fall back to a hash of the name once it stops being one" do
+      long = [?a..?z, ?A..?Z, ?0..?9, ?!, ?-, ?~, ?., ?,, ?;, not: ?q]
+      assert Atom.to_string(guard_name(long)) =~ ~r/^__ascii_char_[0-9a-f]{16}$/
+
+      assert guard_name(long) == guard_name(long)
+      refute guard_name(long) == guard_name(tl(long))
+    end
+
+    test "are usable as function names in a guard" do
+      for ranges <- range_corpus(), name = guard_name(ranges) do
+        assert Atom.to_string(name) =~ ~r/^[a-z_][a-zA-Z0-9_]*$/
+
+        # The file mix nimble_parsec.compile writes has to parse.
+        assert Code.string_to_quoted!("defp f(c) when #{name}(c), do: :ok")
+      end
+    end
+
+    test "are unique for every distinct set of ranges" do
+      # A shared name would silently give one parser the other's comparisons.
+      names =
+        for ranges <- range_corpus(), modifier <- [:integer, :utf8], reduce: %{} do
+          names ->
+            name = guard_name(ranges, modifier)
+            key = {modifier, ranges}
+
+            case names do
+              %{^name => ^key} ->
+                names
+
+              %{^name => other} ->
+                flunk("#{name} is shared by #{inspect(key)} and #{inspect(other)}")
+
+              %{} ->
+                Map.put(names, name, key)
+            end
+        end
+
+      assert map_size(names) == length(range_corpus()) * 2
+    end
+
+    # Ranges that spell each other in more than one way. They all ascend, as
+    # `compile/4` collapses descending ranges before naming them.
+    defp range_corpus do
+      entries = [
+        ?a,
+        ?z,
+        ?0,
+        ?x,
+        ?1,
+        ?2,
+        ?n,
+        ?o,
+        ?t,
+        ?_,
+        ?-,
+        0x12,
+        0x1,
+        0x2,
+        ?a..?z,
+        ?0..?5,
+        0..5,
+        ?2..?x,
+        ?x..?2//1
+      ]
+
+      singles = for entry <- entries, do: [entry]
+      excluded = for entry <- entries, do: [?A..?Z, {:not, entry}]
+      pairs = for left <- entries, right <- entries, do: [left, right]
+      triples = for left <- entries, right <- entries, do: [left, ?B, right]
+
+      Enum.uniq(singles ++ excluded ++ pairs ++ triples)
+    end
+
+    defp guard_name(ranges, modifier \\ :integer) do
+      {inclusive, exclusive} = Enum.split_with(ranges, &(not match?({:not, _}, &1)))
+      NimbleParsec.Compiler.char_guard_name({modifier, inclusive, exclusive})
     end
   end
 
