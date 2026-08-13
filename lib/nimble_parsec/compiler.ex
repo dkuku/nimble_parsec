@@ -1201,7 +1201,7 @@ defmodule NimbleParsec.Compiler do
         ?\t -> "?\\t"
         ?\r -> "?\\r"
         codepoint when codepoint in ?!..?~ -> "?" <> <<codepoint>>
-        codepoint -> "0x" <> String.pad_leading(Integer.to_string(codepoint, 16), 2, "0")
+        codepoint -> Integer.to_string(codepoint)
       end
 
     {:__block__, [token: token], [codepoint]}

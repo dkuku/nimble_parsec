@@ -1646,11 +1646,10 @@ defmodule NimbleParsecTest do
       assert guard_source(ascii_char([?\\, ?~])) =~ "x0 === ?\\\\ or x0 === ?~"
       assert guard_source(ascii_char(not: ?q)) =~ "x0 !== ?q"
 
-      # Codepoints with no printable spelling are spelled in hex, a byte wide at
-      # the least so that every byte reads as two digits.
-      assert guard_source(ascii_char([0x00, 0x1B])) =~ "x0 === 0x00 or x0 === 0x1B"
-      assert guard_source(utf8_char([?é, ?ą])) =~ "x0 === 0xE9 or x0 === 0x105"
-      assert guard_source(utf8_char([0x1F600, 0x1F601])) =~ "x0 === 0x1F600 or x0 === 0x1F601"
+      # Codepoints with no printable spelling stay as plain integers.
+      assert guard_source(ascii_char([0x00, 0x1B])) =~ "x0 === 0 or x0 === 27"
+      assert guard_source(utf8_char([?é, ?ą])) =~ "x0 === 233 or x0 === 261"
+      assert guard_source(utf8_char([0x1F600, 0x1F601])) =~ "x0 === 128_512 or x0 === 128_513"
     end
 
     defp guard_source(combinator) do
